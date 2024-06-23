@@ -11,7 +11,7 @@ from lightgbm import LGBMRegressor
 from matplotlib import pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import confusion_matrix, recall_score, r2_score, mean_squared_error, accuracy_score
-from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.linear_model import LogisticRegression, Ridge, RidgeClassifier
 from sklearn.preprocessing import StandardScaler
 
 
@@ -84,7 +84,7 @@ def event_occurred(row):
         return True
 
 
-def launch_regre(train_, test_, models_, target_):
+def launch_regre(train_, test_, models_, target_, type=1):
     X_train = train_.drop(target_, axis=1)
     X_test = test_.drop(target_, axis=1)
     scaler = StandardScaler()
@@ -112,9 +112,14 @@ def launch_regre(train_, test_, models_, target_):
         ax.set_facecolor('lightgray')
         ax.grid(color='white', zorder=0)
         ax.scatter(real_df[i], pred_df[i], label='Patients', zorder=2)
-        ax.plot([-1, 41], [-1, 41], 'r--', label='Identity', zorder=3)
-        ax.set_xlim([-1, 41])
-        ax.set_ylim([-1, 41])
+        if type == 1:
+            ax.plot([-1, 41], [-1, 41], 'r--', label='Identity', zorder=3)
+            ax.set_xlim([-1, 41])
+            ax.set_ylim([-1, 41])
+        else:
+            ax.plot([-1, 49], [-1, 49], 'r--', label='Identity', zorder=3)
+            ax.set_xlim([-1, 49])
+            ax.set_ylim([-1, 49])
         ax.set_title(model_titles[i], fontsize=15)
         ax.set_xlabel('Reality', fontsize=12)
         ax.set_ylabel('Prediction', fontsize=12)
@@ -164,8 +169,8 @@ def launch(train_, test_, model_, target_, name):
     if not np.all(np.isfinite(shap_values_values)):
         raise ValueError("Les valeurs SHAP contiennent des NaN ou des inf")
     # Affichage des valeurs SHAP avec les noms des variables
-    shap.summary_plot(shap_values, X_test_scaled, plot_type="bar")
-    shap.summary_plot(shap_values, X_test_scaled)
+    shap.summary_plot(shap_values, X_test_scaled, plot_type="bar", max_display=50)
+    shap.summary_plot(shap_values, X_test_scaled, max_display=50)
     X_test_scaled[target_] = y_test.values
     return model_, X_test_scaled
 
@@ -270,3 +275,28 @@ if __name__ == '__main__':
     models_regre = [RandomForestRegressor(random_state=42), RandomForestRegressor(random_state=42),
                     RandomForestRegressor(random_state=42), RandomForestRegressor(random_state=42)]
     model2 = launch_regre(train_regre, test_regre, models_regre, target_alsfrs)
+
+    # ALSFRS-R survival
+    train = read(filename="new_als_R_train")
+    test = read(filename="new_als_R_test")
+    model_class = RidgeClassifier(random_state=42, class_weight='balanced')
+    target_class, target_alsfrs = "Survived", ['ALSFRSR T3', 'ALSFRSR T6', 'ALSFRSR T9', 'ALSFRSR T12']
+    drops_class = ['ID', 'ExID', 'Period', 'Subject ID', 'Source', 'Death Date', 'Survival', 'ALSFRSR T3', 'ALSFRSR T6',
+                   'ALSFRSR T9', 'ALSFRSR T12']
+    drops_regre = ['ID', 'ExID', 'Period', 'Subject ID', 'Source', 'Death Date', 'Survival', 'Survived']
+    features = ['Gender', 'Age', 'Height', 'Q1 Speech', 'Q2 Salivation', 'Q5 Indic', 'Q7 Turning in Bed',
+                'Q8 Walking', 'Q10 Respiratory', 'ALSFRS', 'Symptom Duration', 'Forced Vital Capacity', 'Pulse',
+                'Diastolic Blood Pressure', 'ALSFRSR', 'R 1 Dyspnea', 'R 2 Orthopnea',
+                'R 3 Respiratory Insufficiency', 'bmi', 'upper limbs score', 'lower limbs score', 'mitos movement',
+                'mitos communicating', 'mitos total', 'kings leg', 'kings niv', 'kings total', 'ft9 bulbar',
+                'ft9 total']
+    time, event = test.apply(lambda row: find(row), axis=1), test.apply(lambda row: event_occurred(row), axis=1)
+    train_class, test_class = train.drop(drops_class, axis=1), test.drop(drops_class, axis=1)
+    launch(train_class, test_class, model_class, target_class, "Without Selection")
+    train_class, test_class = train_class[features + [target_class]], test_class[features + [target_class]]
+    model1, test_scaled = launch(train_class, test_class, model_class, target_class, "Differential Evolution")
+    train_regre, test_regre = (train.loc[train['Survived'] == True].drop(drops_regre, axis=1),
+                               test.loc[test['Survived'] == True].drop(drops_regre, axis=1))
+    models_regre = [Ridge(random_state=42), Ridge(random_state=42),
+                    Ridge(random_state=42), Ridge(random_state=42)]
+    launch_regre(train_regre, test_regre, models_regre, target_alsfrs, 2)
