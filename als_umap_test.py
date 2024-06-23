@@ -1,5 +1,7 @@
 import math
 import os
+import pickle
+
 import cv2
 import matplotlib
 import numpy as np
@@ -7,11 +9,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import umap
 import matplotlib.colors as mcolors
+from imblearn.over_sampling import SMOTE
 
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, RidgeClassifier
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, precision_score, recall_score, \
     f1_score, mean_squared_error, r2_score
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 
 def read(filename, separator=','):
@@ -42,8 +45,8 @@ def percent_col(data, col):
 
 
 def projection():
-    dev = read(filename="als_train")
-    val = read(filename="als_test")
+    dev = read(filename="new_als_train")
+    val = read(filename="new_als_test")
     data = pd.concat([dev, val], ignore_index=True, sort=False)
 
     data['ALSFRS T3'] = data.groupby('ID')['ALSFRS'].transform(lambda x: x.iloc[1])
@@ -66,10 +69,20 @@ def projection():
     percent_col(val, target_survival)
 
     scaler = MinMaxScaler()
-    cols = ['Forced Vital Capacity', 'Symptom Duration', 'ALSFRS', 'Height', 'Age', 'Weight', 'Pulse']
+    # scaler = StandardScaler()
+    # cols = ['Forced Vital Capacity', 'Symptom Duration', 'ALSFRS', 'Height', 'Age', 'Weight', 'Pulse']
+    # cols = ['Age', 'Weight', 'Q3 Swallowing', 'Q5 Cutting', 'Symptom Duration', 'Pulse',
+    #         'Systolic Blood Pressure', 'bmi', 'computeZones trunk', 'computeZones leg', 'mitos total', 'alsfrs slope']
+    cols = ['Sex', 'Age', 'Weight', 'Q3 Swallowing', 'Q5 Cutting', 'Symptom Duration', 'Pulse',
+            'Systolic Blood Pressure', 'bmi', 'computeZones trunk', 'computeZones leg', 'mitos total',
+            'alsfrs slope']
+    # cols = ['Forced Vital Capacity', 'alsfrs slope', 'Age', 'bmi', 'Pulse']
     dev_X = dev[cols]
     dev_X = scaler.fit_transform(dev_X)
     dev_X = pd.DataFrame(dev_X, columns=cols)
+
+    # smote = SMOTE(random_state=42)
+    # dev_X_resampled, dev_y_resampled = smote.fit_resample(dev_X, dev[target_survival])
 
     trans = umap.UMAP(n_neighbors=15, metric="euclidean", n_components=2, random_state=42)
     trans.fit(dev_X)
@@ -121,36 +134,15 @@ def projection():
     print([*["ID", "Subject ID", "Source", "X", "Y", "Survived", "ALSFRS T3", "ALSFRS T6", "ALSFRS T9", "ALSFRS T12"],
            *cols])
 
-    df = pd.DataFrame()
-    df["ID"] = data["ID"].values
-    df["Subject ID"] = data["Subject ID"].values
-    df["Source"] = data["Source"].values
-    df["X"] = [*projected[:, 0], *projected_new[:, 0]]
-    df["Y"] = [*projected[:, 1], *projected_new[:, 1]]
-    df["Survived"] = data["Survived"].values
-    df["ALSFRS T3"] = data["ALSFRS T3"].values
-    df["ALSFRS T6"] = data["ALSFRS T6"].values
-    df["ALSFRS T9"] = data["ALSFRS T9"].values
-    df["ALSFRS T12"] = data["ALSFRS T12"].values
-    df["Symptom Duration"] = data["Symptom Duration"].values
-    df["ALSFRS"] = data["ALSFRS"].values
-    df["Forced Vital Capacity"] = data["Forced Vital Capacity"].values
-    df["Age"] = data["Age"].values
-    df["Pulse"] = data["Pulse"].values
-    df["Height"] = data["Height"].values
-    df["Weight"] = data["Weight"].values
-    df["Onset"] = data["Onset Spinal"].values
-    df["Gender"] = data["Sex"].values
-    df["Diastolic Blood Pressure"] = data["Diastolic Blood Pressure"].values
-    df["Systolic Blood Pressure"] = data["Systolic Blood Pressure"].values
-    df[['Q1 Speech', 'Q2 Salivation', 'Q3 Swallowing',
-        'Q4 Handwriting', 'Q5 Cutting', 'Q5 Indic', 'Q6 Dressing and Hygiene', 'Q7 Turning in Bed',
-        'Q8 Walking', 'Q9 Climbing Stairs', 'Q10 Respiratory', ]] = data[
-        ['Q1 Speech', 'Q2 Salivation', 'Q3 Swallowing', 'Q4 Handwriting', 'Q5 Cutting', 'Q5 Indic',
-         'Q6 Dressing and Hygiene', 'Q7 Turning in Bed', 'Q8 Walking', 'Q9 Climbing Stairs',
-         'Q10 Respiratory', ]].values
-
-    write(filename="umap_data", data=df)
+    data["X"] = [*projected[:, 0], *projected_new[:, 0]]
+    data["Y"] = [*projected[:, 1], *projected_new[:, 1]]
+    pro_act = data.loc[data['Source'] == "proact"]
+    exonhit = data.loc[data['Source'] == "exonhit"]
+    write(data=pro_act, filename='new_als_umap_train')
+    write(data=exonhit, filename='new_als_umap_test')
+    data = data.rename(columns={'Sex': 'Gender'})
+    data = data.rename(columns={'Onset Spinal': 'Onset'})
+    write(filename="umap_data", data=data)
 
 
 def generate_plot(x, y, title, labels, color, type_, type2_):
@@ -715,7 +707,124 @@ def square3(division):
     plt.close()
 
 
+def launch(X_test_, y_test_, model_, name_):
+    y_pred = model_.predict(X_test_)
+    matrix = confusion_matrix(y_test_, y_pred)
+    score = recall_score(y_true=y_test_, y_pred=y_pred, average="macro")
+    print(f'\n{name_}:\nscore: {score}\n{matrix}')
+
+
+def get_survival(division):
+    data = read("umap_data")
+    dev = data.loc[data['Source'] == "proact"]
+    val = data.loc[data['Source'] == "exonhit"]
+    x_axis, y_axis = part(1, division), part(1, division)
+    survival_matrix = init_matrix_nan(division, division)
+    ids_20, ids_40, ids_60, ids_80, ids_100 = [], [], [], [], []
+    ids_0_20, ids_20_40, ids_40_60, ids_60_80, ids_80_100 = [], [], [], [], []
+    res = dev["Survived"].value_counts()
+    threshold = res[1] / res[0]
+    for i in range(len(x_axis) - 1):
+        for j in range(len(y_axis) - 1):
+            tmp_dev = dev[(x_axis[i] <= dev['X']) & (dev['X'] <= x_axis[i + 1]) &
+                          (y_axis[j] <= dev['Y']) & (dev['Y'] <= y_axis[j + 1])]
+            tmp_val = val[(x_axis[i] <= val['X']) & (val['X'] <= x_axis[i + 1]) &
+                          (y_axis[j] <= val['Y']) & (val['Y'] <= y_axis[j + 1])]
+            if len(tmp_dev) < 5:
+                survival_rate = np.nan
+            else:
+                # weights = [1 if x == 1 else threshold for x in tmp_dev['Survived']]
+                survival_rate = np.average(tmp_dev['Survived'])
+            survival_matrix[i][j] = survival_rate
+            if survival_rate <= 0.2:
+                ids_20.extend(tmp_dev["ID"].values)
+            elif 0.2 < survival_rate <= 0.4:
+                ids_40.extend(tmp_dev["ID"].values)
+            elif 0.4 < survival_rate <= 0.6:
+                ids_60.extend(tmp_dev["ID"].values)
+            elif 0.6 < survival_rate <= 0.8:
+                ids_80.extend(tmp_dev["ID"].values)
+            elif survival_rate > 0.8:
+                ids_100.extend(tmp_dev["ID"].values)
+            for index, row in tmp_val.iterrows():
+                if survival_rate <= 0.2:
+                    ids_0_20.append(row["ID"])
+                elif survival_rate <= 0.4:
+                    ids_20_40.append(row["ID"])
+                elif survival_rate <= 0.6:
+                    ids_40_60.append(row["ID"])
+                elif survival_rate <= 0.8:
+                    ids_60_80.append(row["ID"])
+                elif survival_rate <= 1.0:
+                    ids_80_100.append(row["ID"])
+
+    dev_, val_ = dev.copy(), val.copy()
+
+    features = ['Gender', 'Age', 'Weight', 'Q3 Swallowing', 'Q5 Cutting', 'Symptom Duration', 'Pulse',
+                'Systolic Blood Pressure', 'bmi', 'computeZones trunk', 'computeZones leg', 'mitos total',
+                'alsfrs slope']
+    target = "Survived"
+    train, test = dev_[features + [target]], val_[features + [target]]
+    X, y = train.drop(target, axis=1).values, train[target].values
+    X_train, y_train = X, y
+    model = RidgeClassifier(class_weight="balanced")
+    model.fit(X_train, y_train)
+    X_test, y_test = test.drop(target, axis=1).values, test[target].values
+    launch(X_test_=X_test, y_test_=y_test, model_=model, name_="All")
+
+    df_ids_20 = val_.loc[val_['ID'].isin(ids_0_20)]
+    launch(X_test_=df_ids_20[features].values, y_test_=df_ids_20[target].values, model_=model, name_="0:20")
+    df_ids_40 = val_.loc[val_['ID'].isin(ids_20_40)]
+    launch(X_test_=df_ids_40[features].values, y_test_=df_ids_40[target].values, model_=model, name_="20:40")
+    df_ids_60 = val_.loc[val_['ID'].isin(ids_40_60)]
+    launch(X_test_=df_ids_60[features].values, y_test_=df_ids_60[target].values, model_=model, name_="40:60")
+    df_ids_80 = val_.loc[val_['ID'].isin(ids_60_80)]
+    launch(X_test_=df_ids_80[features].values, y_test_=df_ids_80[target].values, model_=model, name_="60:80")
+    df_ids_100 = val_.loc[val_['ID'].isin(ids_80_100)]
+    launch(X_test_=df_ids_100[features].values,y_test_=df_ids_100[target].values, model_=model, name_="80:100")
+
+    div = division
+    generate_plot_rate(matrix=survival_matrix, title="A. 1-year Survival", cmap='RdYlGn', val=val_, div=div, idx=[])
+
+    exit(42)
+
+
+    dev_ = dev_[
+        ['ID', 'Gender', 'Onset', 'Age', 'Height', 'Weight', 'ALSFRS', 'Symptom Duration', 'Forced Vital Capacity',
+         'Pulse', "Diastolic Blood Pressure", "Systolic Blood Pressure"]]
+    df_ids_20 = dev_.loc[dev_['ID'].isin(ids_20)]
+    df_ids_40 = dev_.loc[dev_['ID'].isin(ids_40)]
+    df_ids_60 = dev_.loc[dev_['ID'].isin(ids_60)]
+    df_ids_80 = dev_.loc[dev_['ID'].isin(ids_80)]
+    df_ids_100 = dev_.loc[dev_['ID'].isin(ids_100)]
+
+    stats_20, stats_40, stats_60, stats_80, stats_100 = (pd.Series(dtype='float64'), pd.Series(dtype='float64'),
+                                                         pd.Series(dtype='float64'), pd.Series(dtype='float64'),
+                                                         pd.Series(dtype='float64'))
+    for col in [x for x in dev_.columns if x != "ID"]:
+        if dev_[col].nunique() <= 2:
+            stats_20[col] = calculate_count(df_ids_20, col)
+            stats_40[col] = calculate_count(df_ids_40, col)
+            stats_60[col] = calculate_count(df_ids_60, col)
+            stats_80[col] = calculate_count(df_ids_80, col)
+            stats_100[col] = calculate_count(df_ids_100, col)
+        else:
+            stats_20[col] = "{}:{}".format(round(df_ids_20[col].mean(), 2), round(std(df_ids_20[col].values), 2))
+            stats_40[col] = "{}:{}".format(round(df_ids_40[col].mean(), 2), round(std(df_ids_40[col].values), 2))
+            stats_60[col] = "{}:{}".format(round(df_ids_60[col].mean(), 2), round(std(df_ids_60[col].values), 2))
+            stats_80[col] = "{}:{}".format(round(df_ids_80[col].mean(), 2), round(std(df_ids_80[col].values), 2))
+            stats_100[col] = "{}:{}".format(round(df_ids_100[col].mean(), 2), round(std(df_ids_100[col].values), 2))
+
+    stats = pd.concat([stats_20, stats_40, stats_60, stats_80, stats_100], axis=1)
+    stats = stats.reset_index()
+    stats.rename(columns={'index': 'Survival Rate', 0: '0:20', 1: '20:40', 2: '40:60', 3: '60:80', 4: '80:100'},
+                 inplace=True)
+
+    write(filename="stats_survidev_rate_2", data=stats)
+
+
 if __name__ == '__main__':
     projection()
-    square(division=20)
-    square3(division=20)
+    # square(division=20)
+    # square3(division=20)
+    # get_survival(division=20)

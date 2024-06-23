@@ -1,14 +1,18 @@
 import math
 import os
-
 import numpy as np
 import pandas as pd
 import shap
 
+from lifelines import KaplanMeierFitter
+from lifelines.statistics import multivariate_logrank_test
+from lifelines.utils import concordance_index
 from lightgbm import LGBMRegressor
-from sklearn.metrics import confusion_matrix, recall_score, r2_score, mean_squared_error
-from sklearn.multioutput import MultiOutputRegressor
-from sklearn.linear_model import RidgeClassifier
+from matplotlib import pyplot as plt
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import confusion_matrix, recall_score, r2_score, mean_squared_error, accuracy_score
+from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.preprocessing import StandardScaler
 
 
 def read(filename, separator=','):
@@ -17,6 +21,15 @@ def read(filename, separator=','):
         data = pd.read_excel(path + '.xlsx', index_col=None, engine='openpyxl')
     except FileNotFoundError:
         data = pd.read_csv(path + '.csv', index_col=None, sep=separator)
+    return data
+
+
+def write(filename, data):
+    path = os.path.join(os.getcwd(), os.path.join('datasets', filename))
+    try:
+        data.to_excel(path + '.xlsx', index=False)
+    except FileNotFoundError:
+        data.to_csv(path + '.csv', index=False)
     return data
 
 
@@ -57,133 +70,203 @@ def dist_for_percentage(reals, preds, percentage):
         dist += 0.01
 
 
-def create_regre(filename, drops_, target_, features_, params):
-    data = read(filename=filename)
-    data = data.rename(columns={'Sex': 'Gender'})
-    static = ["Subject ID", "Source", "ID", "ExID", "Symptom Duration", "Onset Spinal", "Onset Bulbar", "Age", "Gender",
-              "Height", "Death Date", "Survived", "Survival", "ALSFRS T3", "ALSFRS T6", "ALSFRS T9", "ALSFRS T12",
-              "Period"]
-    if len(features_) != 0:
-        data = data[features_ + drops_ + [*target_]]
-    static = [x for x in static if x in data.columns]
-    t3 = (data.loc[(data['Period'] == 1) | (data['Period'] == 2)]).groupby('ID').apply(concat_rows, drop_lst=static)
-    t6 = (data.loc[(data['Period'] == 1) |
-                   (data['Period'] == 2) | (data['Period'] == 3)]).groupby('ID').apply(concat_rows, drop_lst=static)
-    t9 = (data.loc[(data['Period'] == 1) | (data['Period'] == 2) |
-                   (data['Period'] == 3) | (data['Period'] == 4)]).groupby('ID').apply(concat_rows, drop_lst=static)
-    datasets, periods = [t3, t6, t9], ["", "T_3", "T_9", "T_12"]
-    for i in range(len(datasets)):
-        datasets[i] = pd.merge(datasets[i], data.loc[data['Period'] == 1][static], on="ID", how='left')
-        datasets[i] = datasets[i].loc[datasets[i]['Survived'] == 1]
-    data = data.loc[(data['Period'] == 1) & (data['Survived'] == 1)]
-    t0 = data.copy()
-    datasets.insert(0, t0)
-    period = ["T3", "T6", "T9", "T12"]
-    m = 0
-    model_ = None
-    real_df, pred_df = [], []
-    for i in range(len(datasets)):
-        dev, val = datasets[i].loc[datasets[i]['Source'] == "proact"], \
-                   datasets[i].loc[datasets[i]['Source'] == "exonhit"]
-        dev, val = dev.drop(drops_, axis=1), val.drop(drops_, axis=1)
-        dev = dev.astype(np.float64)
-        val = val.astype(np.float64)
-        X_train, X_test = dev.drop(target_, axis=1), val.drop(target_, axis=1)
-        y_train, y_test = dev[target_].values, val[target_].values
-        model_i = LGBMRegressor(**params, random_state=42)
-        wrapper = MultiOutputRegressor(model_i)
-        wrapper.fit(X_train, y_train)
-        if i == 0:
-            model_ = wrapper
-        y_pred = wrapper.predict(X_test)
-        n_feats = X_train.shape[1]
-        for j in range(m, 5):
-            if j != 4:
-                reals, preds = [k[j] for k in y_test], [k[j] for k in y_pred]
-                time = period[j]
-            else:
-                reals, preds = flatten([k[m:] for k in y_test]), flatten([k[m:] for k in y_pred])
-                time = "Total"
-            rmse = math.sqrt(mean_squared_error(y_true=reals, y_pred=preds))
-            rsquared_total = 1 - (1 - r2_score(reals, preds)) * (len(reals) - 1) / (len(reals) - n_feats - 1)
-            pcc = np.corrcoef(reals, preds)[0, 1]
-            dist_75 = dist_for_percentage(reals=reals, preds=preds, percentage=0.75)
-            dist_80 = dist_for_percentage(reals=reals, preds=preds, percentage=0.80)
-            dist_85 = dist_for_percentage(reals=reals, preds=preds, percentage=0.85)
-            dist_90 = dist_for_percentage(reals=reals, preds=preds, percentage=0.90)
-            print(time + " RMSE    " + ":", "{:.3f}".format(rmse), " R²      " + ":", "{:.4f}".format(rsquared_total),
-                  " PCC      " + ":", "{:.3f}".format(pcc),
-                  " 75%:", "{:.2f}".format(dist_75), " 80%:", "{:.2f}".format(dist_80),
-                  " 85%:", "{:.2f}".format(dist_85), " 90%:", "{:.2f}".format(dist_90))
-        print("\n")
-        m = m + 1
-        real_df.append(y_test)
-        pred_df.append(y_pred)
+def find(row):
+    if np.isnan(row['Death Date']) or row['Death Date'] > 12.1:
+        return 12.1
+    else:
+        return row['Death Date']
 
-    return model_
+
+def event_occurred(row):
+    if np.isnan(row['Death Date']) or row['Death Date'] > 12.1:
+        return False
+    else:
+        return True
+
+
+def launch_regre(train_, test_, models_, target_):
+    X_train = train_.drop(target_, axis=1)
+    X_test = test_.drop(target_, axis=1)
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns)
+    X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns)
+    ms, real_df, pred_df, rmse_df = [], [], [], []
+    for i in range(4):
+        m = models_[i].fit(X_train_scaled, train_[target_[i]])
+        y_pred = m.predict(X_test_scaled)
+        y_test = test_[target_[i]]
+        rmse = math.sqrt(mean_squared_error(y_test, y_pred))
+        rsquared_adj = (1 - (1 - r2_score(y_test, y_pred)) * (len(y_test) - 1) / (len(y_test) - X_train.shape[1] - 1))
+        rsquared = r2_score(y_test, y_pred)
+        pcc = np.corrcoef(y_test, y_pred)[0, 1]
+        print(f"{target_[i]} RMSE: {rmse:.4f}, rsquared: {rsquared:.4f}, rsquared_adj: {rsquared_adj:.4f},"
+              f" PCC: {pcc:.4f}")
+        ms.append(m)
+        real_df.append(y_test), pred_df.append(y_pred), rmse_df.append(rmse)
+
+    model_titles = ["T3", "T6", "T9", "T12"]
+    fig, axs = plt.subplots(2, 2, figsize=(10, 10))
+    for i, ax in enumerate(axs.flat):
+        ax.set_facecolor('lightgray')
+        ax.grid(color='white', zorder=0)
+        ax.scatter(real_df[i], pred_df[i], label='Patients', zorder=2)
+        ax.plot([-1, 41], [-1, 41], 'r--', label='Identity', zorder=3)
+        ax.set_xlim([-1, 41])
+        ax.set_ylim([-1, 41])
+        ax.set_title(model_titles[i], fontsize=15)
+        ax.set_xlabel('Reality', fontsize=12)
+        ax.set_ylabel('Prediction', fontsize=12)
+        ax.annotate(f'RMSE: {rmse_df[i]:.2f}', xy=(0.05, 0.95), xycoords='axes fraction',
+                    fontsize=12, ha='left', va='top',
+                    bbox=dict(boxstyle='round,pad=0.3', edgecolor='black', facecolor='white'))
+    # Ajouter une légende commune
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(handles, labels, loc='lower center', ncol=2, fontsize=12)
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
+    plt.show()
+    return ms
 
 
 def launch(train_, test_, model_, target_, name):
-    X, y = train_.drop(target_, axis=1).values, train_[target_].values
-    X_train, y_train = X, y
+    # Séparation des caractéristiques et de la cible
+    X_train = train_.drop(target_, axis=1)
+    y_train = train_[target_]
+    X_test = test_.drop(target_, axis=1)
+    y_test = test_[target_]
+    # Normalisation des données
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    # Convertir les données normalisées en DataFrame pour conserver les noms des colonnes
+    X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns)
+    X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns)
+    # Entraînement du modèle
+    model_.fit(X_train_scaled, y_train)
+    # Prédiction sur les données de test
+    y_pred_test = model_.predict(X_test_scaled)
+    matrix_test = confusion_matrix(y_test, y_pred_test)
+    score_test = recall_score(y_true=y_test, y_pred=y_pred_test, average="macro")
+    # Prédiction sur les données d'entraînement
+    y_pred_train = model_.predict(X_train_scaled)
+    matrix_train = confusion_matrix(y_train, y_pred_train)
+    score_train = recall_score(y_true=y_train, y_pred=y_pred_train, average="macro")
+    # Affichage des résultats
+    print(f'\n{name}:\n')
+    print(f'Score Train: {score_train}\nMatrice de confusion Train:\n{matrix_train}\n')
+    print(f'Score Test: {score_test}\nMatrice de confusion Test:\n{matrix_test}\n')
+    # Calcul des valeurs SHAP sur les données normalisées
+    explainer = shap.Explainer(model_, X_train_scaled)
+    shap_values = explainer(X_test_scaled)
+    # Vérifiez les valeurs SHAP
+    shap_values_values = np.array([val.values for val in shap_values])
+    if not np.all(np.isfinite(shap_values_values)):
+        raise ValueError("Les valeurs SHAP contiennent des NaN ou des inf")
+    # Affichage des valeurs SHAP avec les noms des variables
+    shap.summary_plot(shap_values, X_test_scaled, plot_type="bar")
+    shap.summary_plot(shap_values, X_test_scaled)
+    X_test_scaled[target_] = y_test.values
+    return model_, X_test_scaled
+
+
+def predict_confidence(model_, test_, target_):
     X_test, y_test = test_.drop(target_, axis=1).values, test_[target_].values
-    model_.fit(X_train, y_train)
-    y_pred = model_.predict(X_test)
-    matrix = confusion_matrix(y_test, y_pred)
-    score = recall_score(y_true=y_test, y_pred=y_pred, average="macro")
-    print(f'\n{name}:\nscore: {score}\n{matrix}')
-    explainer = shap.Explainer(model, train_.drop(target_, axis=1))
-    shap_values = explainer(test_.drop(target_, axis=1))
-    shap.summary_plot(shap_values, test_.drop(target_, axis=1), plot_type="bar")
-    shap.summary_plot(shap_values, test_.drop(target_, axis=1))
-    return model_
+    probas = model_.predict_proba(X_test)[:, 1]
+    zones = [(0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
+    results = []
+    for (low, high) in zones:
+        mask = (probas >= low) & (probas < high)
+        if np.sum(mask) > 0:
+            y_pred_zone = (probas[mask] >= 0.5).astype(int)
+            accuracy = accuracy_score(y_test[mask], y_pred_zone)
+            results.append((low, high, accuracy, np.sum(mask)))
+    df_results = pd.DataFrame(results, columns=['Zone min', 'Zone max', 'Exactitude', 'Nombre d\'échantillons'])
+    print(df_results)
+    return probas
 
 
-def patient_info(patient_):
-    if patient_[0] == 0.0:
-        gender_ = "Woman"
-    else:
-        gender_ = "Man"
-    print(f"Gender: {gender_}, Age: {patient_[1]}, Weight: {patient_[2]}, Height: {patient_[3]}, q2: {patient_[4]}, "
-          f"q5: {patient_[5]}, q7: {patient_[6]}, ALSFRS: {patient_[7]}, Symptom Duration: {patient_[8]}, "
-          f"Pulse: {patient_[9]}, Systolic Blood Pressure: {patient_[10]}")
+def model_stats(predictions_, test_, target_):
+    X_test = test_.drop(target_, axis=1)
+    probas = predictions_
+    X_test['probas'] = probas
+    zones = [(0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
+    zone_labels = ['0:20', '20:40', '40:60', '60:80', '80:100']
+    results = []
+    for feature in X_test.columns[:-1]:
+        feature_stats = {'Feature': feature}
+        for (low, high), label in zip(zones, zone_labels):
+            mask = (X_test['probas'] >= low) & (X_test['probas'] < high)
+            feature_stats[f'{label} Avg'] = X_test.loc[mask, feature].mean().round(2)
+            feature_stats[f'{label} Std'] = X_test.loc[mask, feature].std().round(2)
+            feature_stats[f'{label} (nb patients)'] = mask.sum()
+        results.append(feature_stats)
+    df_results = pd.DataFrame(results)
+    print(df_results)
+    write(data=df_results, filename='feature_stats')
+
+
+def kaplan_meier(time_, event_, predictions_):
+    df = pd.DataFrame()
+    df['probas'] = predictions_
+    print(predictions_)
+    df['groups'] = pd.cut(df['probas'], bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
+                          labels=['0-20%', '20-40%', '40-60%', '60-80%', '80-100%'])
+    df['Time'] = time_
+    df['Event'] = event_
+    print(df)
+    print(len(df.loc[df['Event'] == True]), len(df.loc[df['Event'] == False]))
+    kmf = KaplanMeierFitter()
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.set_facecolor('lightgray')
+    plt.grid(color='white', zorder=0)
+    for name, grouped_df in df.groupby('groups'):
+        kmf.fit(grouped_df['Time'], event_observed=grouped_df['Event'], label=name)
+        kmf.plot_survival_function()
+    plt.xlabel('Time (months)')
+    plt.ylabel('Survival Probability')
+    plt.legend(title='Probability Cluster')
+    plt.tight_layout()
+    plt.grid()
+    plt.show()
+    plt.close()
+    c_index = concordance_index(time_, predictions_, event_)
+    print(f'C-index: {c_index:.2f}')
+    results = multivariate_logrank_test(df['Time'], df['groups'], df['Event'])
+    print(f'Global Log-Rank test p-value: {results.p_value:.4f}')
 
 
 if __name__ == '__main__':
-    train = read(filename="als_train")
-    test = read(filename="als_test")
-    train, test = train.loc[train['Period'] == 1], test.loc[test['Period'] == 1]
-    train = train.rename(columns={'Sex': 'Gender'})
-    test = test.rename(columns={'Sex': 'Gender'})
-
+    train = read(filename="new_als_train")
+    test = read(filename="new_als_test")
     print("===1-year Survival Classification Model===")
-    model = RidgeClassifier(class_weight="balanced")
-    target = "Survived"
+    model_class = LogisticRegression(random_state=42, class_weight='balanced', solver='lbfgs', max_iter=10000)
+    target_class, target_alsfrs = "Survived", ['ALSFRS T3', 'ALSFRS T6', 'ALSFRS T9', 'ALSFRS T12']
     metric = "recall"
-    drops = ['ID', 'ExID', 'Period', 'Subject ID', 'Source', 'Death Date', 'Survival', 'ALSFRS T12']
-    features = ['Gender', 'Age', 'Weight', 'Height', 'Q2 Salivation', 'Q5 Cutting', 'Q7 Turning in Bed', 'ALSFRS',
-                'Symptom Duration', 'Pulse', 'Systolic Blood Pressure']
-    train, test = train.drop(drops, axis=1), test.drop(drops, axis=1)
-    launch(train, test, model, target, "Without Selection")
-    train, test = train[features + [target]], test[features + [target]]
-    model1 = launch(train, test, model, target, "Differential Evolution")
+    drops_class = ['ID', 'ExID', 'Period', 'Subject ID', 'Source', 'Death Date', 'Survival', 'ALSFRS T3', 'ALSFRS T6',
+                   'ALSFRS T9', 'ALSFRS T12']
+    drops_regre = ['ID', 'ExID', 'Period', 'Subject ID', 'Source', 'Death Date', 'Survival', 'Survived']
+    features = ['Gender', 'Age', 'Weight', 'Height', 'Onset', 'Q1 Speech', 'Q2 Salivation', 'Q3 Swallowing',
+                'Q5 Cutting', 'Q6 Dressing and Hygiene', 'Q7 Turning in Bed', 'Symptom Duration',
+                'Forced Vital Capacity', 'Pulse', 'Diastolic Blood Pressure', 'mitos movement', 'kings niv',
+                'kings total', 'decline rate']
+    # Survival analysis
+    time, event = test.apply(lambda row: find(row), axis=1), test.apply(lambda row: event_occurred(row), axis=1)
+    train_class, test_class = train.drop(drops_class, axis=1), test.drop(drops_class, axis=1)
+    launch(train_class, test_class, model_class, target_class, "Without Selection")
+    train_class, test_class = train_class[features + [target_class]], test_class[features + [target_class]]
+    model1, test_scaled = launch(train_class, test_class, model_class, target_class, "Differential Evolution")
+    predictions = predict_confidence(model1, test_scaled, target_class)
+    model_stats(predictions, test_class, target_class)
+    kaplan_meier(time, event, predictions)
+    print(model1.coef_)
+    print(model1.intercept_)
     print("\n\n")
 
-    print("===ALSFRS Regression Model===\n")
-    p = {'learning_rate': 0.026518209103740586, 'boosting_type': 'goss', 'n_estimators': 300, 'metric': 'rmse',
-         'colsample_bytree': 0.5156322687606358, 'num_leaves': 175, 'subsample': 0.8155352104051389,
-         'max_depth': 4, 'min_child_samples': 53, 'verbose': -1}
-    model2 = create_regre(filename="dataset",
-                          drops_=['ID', 'ExID', 'Period', 'Subject ID', 'Source', 'Death Date', 'Survived'],
-                          target_=["ALSFRS T3", "ALSFRS T6", "ALSFRS T9", "ALSFRS T12"], features_=features, params=p)
-    print("\n\n")
-
-    gender, age, weight, height = 0, 55, 75, 175
-    q2, q5, q7, alsfrs = 4, 4, 4, 30
-    symptom, pulse, sbp = 22.53, 77.18, 131.71
-    patient = np.array([gender, age, weight, height, q2, q5, q7, alsfrs, symptom, pulse, sbp])
-
-    print("===Testing With A New Individual===\n")
-    patient_info(patient)
-    print("Test 1-year Survival:", model1._predict_proba_lr(patient.reshape(1, -1)))
-    print("Test Disease progression:", model2.predict(patient.reshape(1, -1)))
+    # Disease progression
+    train_regre, test_regre = (train.loc[train['Survived'] == True].drop(drops_regre, axis=1),
+                               test.loc[test['Survived'] == True].drop(drops_regre, axis=1))
+    models_regre = [RandomForestRegressor(random_state=42), RandomForestRegressor(random_state=42),
+                    RandomForestRegressor(random_state=42), RandomForestRegressor(random_state=42)]
+    model2 = launch_regre(train_regre, test_regre, models_regre, target_alsfrs)
