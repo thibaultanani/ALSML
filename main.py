@@ -1,6 +1,8 @@
 import os
 import pickle
 import gzip
+
+import joblib
 import numpy as np
 import pandas as pd
 
@@ -84,8 +86,7 @@ if __name__ == '__main__':
     dataset_alsfrs = dataset.drop(drops, axis=1)
     dataset_alsfrs = dataset_alsfrs[features + [*target]]
     model2, scaler2 = launch_regre(dataset_alsfrs, model, target)
-    with gzip.open(os.path.join(folder, 'als_model_reg.pkl.gz'), 'wb') as file:
-        pickle.dump(model2, file)
+    joblib.dump(model2, os.path.join(folder, 'als_model_reg.joblib'), compress=3)
     print("Test Disease progression:", model2.predict(scaled_patient))
     print("\n\n")
 
