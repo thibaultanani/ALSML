@@ -138,5 +138,3 @@ if __name__ == '__main__':
                    'kings total', 'decline rate']
     fitness(train=train_df, subset=features_de, target=target_feature, models=scikit_models, metric=scoring_metric,
             standardisation=std, k=fold_number)
-
-

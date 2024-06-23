@@ -1,12 +1,9 @@
 import os
 import pickle
-import matplotlib
+import gzip
 import numpy as np
 import pandas as pd
-import plotly.express as px
 
-from lightgbm import LGBMRegressor
-from matplotlib import pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LogisticRegression
 from sklearn.multioutput import MultiOutputRegressor
@@ -87,7 +84,7 @@ if __name__ == '__main__':
     dataset_alsfrs = dataset.drop(drops, axis=1)
     dataset_alsfrs = dataset_alsfrs[features + [*target]]
     model2, scaler2 = launch_regre(dataset_alsfrs, model, target)
-    with open(os.path.join(folder, 'als_model_reg.pkl'), 'wb') as file:
+    with gzip.open(os.path.join(folder, 'als_model_reg.pkl.gz'), 'wb') as file:
         pickle.dump(model2, file)
     print("Test Disease progression:", model2.predict(scaled_patient))
     print("\n\n")
