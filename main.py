@@ -50,7 +50,7 @@ if __name__ == '__main__':
     fvc, decline_rate, pulse = 2.75, 0.212765957446809, 76
     gender, age, weight, height = True, 65, 74, 168
     q1, q2, q3, q5, q6, q7 = 4, 4, 4, 3, 2, 3
-    kings_total, kings_niv, dbp = 2, 2, 110
+    kings_total, kings_niv, dbp = 2, 0, 110
     symptom, onset, mitos_movement = 47, True, 0
     patient = np.array([gender, age, weight, height, onset, q1, q2, q3, q5, q6, q7, symptom, fvc, pulse, dbp,
                         mitos_movement, kings_niv, kings_total, decline_rate])
