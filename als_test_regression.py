@@ -18,6 +18,8 @@ from als_test import read
 def fitness(train, subset, targets, models, standardisation, k):
     for target in targets:
         train_ = train[subset + [target]].copy()
+        # train_ = train_.loc[train_[target] > 0]
+        # print(train_.shape)
         X_train, y_train = train_.drop(columns=[target]), train_[target]
         max_score, max_model, kfold_scores = 10000, None, []
         all_y_val_overall = []
@@ -64,33 +66,13 @@ if __name__ == '__main__':
     std = True
     removal = ['ID', 'ExID', 'Period', 'Subject ID', 'Source', 'Death Date', 'Survival', 'Survived']
     scikit_models = [LinearRegression(), Ridge(random_state=42),
-                     KNeighborsRegressor(n_neighbors=10, weights='distance'),
-                     DecisionTreeRegressor(random_state=42), RandomForestRegressor(random_state=42),
-                     LGBMRegressor(verbosity=-1, random_state=42)]
+                     KNeighborsRegressor(weights='distance', algorithm='kd_tree', n_neighbors=int(math.sqrt(train_df.shape[0] / 10))),
+                     DecisionTreeRegressor(random_state=42), RandomForestRegressor(random_state=42, n_estimators=50),
+                     LGBMRegressor(verbosity=-1, random_state=42, n_estimators=50)]
     features = ['Gender', 'Age', 'Weight', 'Height', 'Onset', 'Q1 Speech', 'Q2 Salivation', 'Q3 Swallowing',
                 'Q5 Cutting', 'Q6 Dressing and Hygiene', 'Q7 Turning in Bed', 'Symptom Duration',
                 'Forced Vital Capacity', 'Pulse', 'Diastolic Blood Pressure', 'mitos movement', 'kings niv',
                 'kings total', 'decline rate']
     print("alsfrs DE selection:")
     fitness(train=train_df, subset=features, targets=target_feature, models=scikit_models,
-            standardisation=std, k=fold_number)
-    print("\n")
-
-
-    train_df = read(filename="new_als_R_train")
-    train_df = train_df.loc[train_df['Survived'] == True]
-    target_feature = ['ALSFRSR T3', 'ALSFRSR T6', 'ALSFRSR T9', 'ALSFRSR T12']
-    train_df = train_df.drop(columns=removal)
-    features_R = ['Gender', 'Age', 'Height', 'Q1 Speech', 'Q2 Salivation', 'Q5 Indic', 'Q7 Turning in Bed',
-                  'Q8 Walking', 'Q10 Respiratory', 'ALSFRS', 'Symptom Duration', 'Forced Vital Capacity', 'Pulse',
-                  'Diastolic Blood Pressure', 'ALSFRSR', 'R 1 Dyspnea', 'R 2 Orthopnea',
-                  'R 3 Respiratory Insufficiency', 'bmi', 'upper limbs score', 'lower limbs score', 'mitos movement',
-                  'mitos communicating', 'mitos total', 'kings leg', 'kings niv', 'kings total', 'ft9 bulbar',
-                  'ft9 total']
-    scikit_models = [LinearRegression(), Ridge(random_state=42),
-                     KNeighborsRegressor(n_neighbors=10, weights='distance'),
-                     DecisionTreeRegressor(random_state=42), RandomForestRegressor(random_state=42),
-                     LGBMRegressor(verbosity=-1, random_state=42)]
-    print("alsfrs-r DE selection:")
-    fitness(train=train_df, subset=features_R, targets=target_feature, models=scikit_models,
             standardisation=std, k=fold_number)

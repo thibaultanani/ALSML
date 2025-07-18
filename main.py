@@ -1,12 +1,10 @@
 import os
 import pickle
-import gzip
-
 import joblib
 import numpy as np
 import pandas as pd
 
-from sklearn.ensemble import RandomForestRegressor
+from lightgbm import LGBMRegressor
 from sklearn.linear_model import LogisticRegression
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.preprocessing import StandardScaler
@@ -80,7 +78,7 @@ if __name__ == '__main__':
     print("\n")
 
     print("===ALSFRS Regression Model===")
-    model = RandomForestRegressor(random_state=42)
+    model = LGBMRegressor(verbosity=-1, random_state=42, n_estimators=50)
     target = ["ALSFRS T3", "ALSFRS T6", "ALSFRS T9", "ALSFRS T12"]
     drops = ['ID', 'ExID', 'Period', 'Subject ID', 'Source', 'Death Date', 'Survival', 'Survived']
     dataset_alsfrs = dataset.drop(drops, axis=1)
@@ -89,4 +87,3 @@ if __name__ == '__main__':
     joblib.dump(model2, os.path.join(folder, 'als_model_reg.joblib'), compress=3)
     print("Test Disease progression:", model2.predict(scaled_patient))
     print("\n\n")
-
