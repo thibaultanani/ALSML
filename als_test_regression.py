@@ -66,7 +66,7 @@ if __name__ == '__main__':
     std = True
     removal = ['ID', 'ExID', 'Period', 'Subject ID', 'Source', 'Death Date', 'Survival', 'Survived']
     scikit_models = [LinearRegression(), Ridge(random_state=42),
-                     KNeighborsRegressor(weights='distance', algorithm='kd_tree', n_neighbors=int(math.sqrt(train_df.shape[0] / 10))),
+                     KNeighborsRegressor(weights='distance', algorithm='kd_tree', n_neighbors=int(math.sqrt(train_df.shape[0] / fold_number))),
                      DecisionTreeRegressor(random_state=42), RandomForestRegressor(random_state=42, n_estimators=50),
                      LGBMRegressor(verbosity=-1, random_state=42, n_estimators=50)]
     features = ['Gender', 'Age', 'Weight', 'Height', 'Onset', 'Q1 Speech', 'Q2 Salivation', 'Q3 Swallowing',

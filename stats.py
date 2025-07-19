@@ -26,6 +26,7 @@ if __name__ == '__main__':
     train = read(filename="new_als_train")
     test = read(filename="new_als_test")
     train, test = train.loc[train['Period'] == 1], test.loc[test['Period'] == 1]
+    pulse = read(filename="new_als_test_pulse")
 
     data = pd.concat([train, test], ignore_index=True, sort=False)
     pro_act = data.loc[data['Source'] == "proact"]
@@ -35,18 +36,28 @@ if __name__ == '__main__':
     data = data.drop(drops, axis=1)
     pro_act = pro_act.drop(drops, axis=1)
     exonhit = exonhit.drop(drops, axis=1)
+    pulse = pulse.drop(['ID', 'Death Date'], axis=1)
+
+    pulse['Gender'] = pulse['Gender'].astype(bool)
+    pulse['Onset'] = pulse['Onset'].astype(bool)
 
     proact_df = model_stats(pro_act, 'proact')
     exonhit_df = model_stats(exonhit, 'exonhit')
     overall_df = model_stats(data, 'all')
+    pulse['Pulse'] = 0
+    pulse['Diastolic Blood Pressure'] = 0
+    pulse['Systolic Blood Pressure'] = 0
+    pulse_df = model_stats(pulse, 'pulse')
 
     latex_lines = []
     for feature in overall_df['Feature'].values:
         proact_values = proact_df[proact_df['Feature'] == feature].iloc[0][['Avg', 'Std', 'Min', 'Max']]
         exonhit_values = exonhit_df[exonhit_df['Feature'] == feature].iloc[0][['Avg', 'Std', 'Min', 'Max']]
         overall_values = overall_df[overall_df['Feature'] == feature].iloc[0][['Avg', 'Std', 'Min', 'Max']]
+        pulse_values = pulse_df[pulse_df['Feature'] == feature].iloc[0][['Avg', 'Std', 'Min', 'Max']]
 
-        line = f"{feature} & {proact_values['Avg']} & {proact_values['Std']} & {proact_values['Min']} & {proact_values['Max']} & {exonhit_values['Avg']} & {exonhit_values['Std']} & {exonhit_values['Min']} & {exonhit_values['Max']} & {overall_values['Avg']} & {overall_values['Std']} & {overall_values['Min']} & {overall_values['Max']} \\\\"
+        # line = f"{feature} & {proact_values['Avg']} & {proact_values['Std']} & {proact_values['Min']} & {proact_values['Max']} & {exonhit_values['Avg']} & {exonhit_values['Std']} & {exonhit_values['Min']} & {exonhit_values['Max']} & {pulse_values['Avg']} & {pulse_values['Std']} & {pulse_values['Min']} & {pulse_values['Max']} \\\\"
+        line = f"{feature} &  {pulse_values['Avg']} & {pulse_values['Std']} & {pulse_values['Min']} & {pulse_values['Max']} \\\\"
         line = line.replace("nan", "--")
         latex_lines.append(line)
 
